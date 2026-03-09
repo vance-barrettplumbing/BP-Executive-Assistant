@@ -4,7 +4,7 @@ BP Executive Assistant – Morning Brief
 Runs every weekday morning at 4 AM and:
 
 1. Rolls over any incomplete tasks ([ ] checkboxes) from the previous
-   weekday's Capacities daily note into today's note.
+   weekday's Obsidian daily note into today's note.
 2. Pulls Todoist tasks due today and adds them to today's note.
 3. Pulls Gmail emails matching the configured search query + Google Tasks
    due today and adds them to today's note.
@@ -25,11 +25,9 @@ from dotenv import load_dotenv
 
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
 
-# Load .env from the project root (one level up from src/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
-# Set up logging
 _log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 _log_file = os.getenv("LOG_FILE", "")
 
@@ -49,9 +47,9 @@ logger = logging.getLogger("morning_brief")
 
 # ── Integrations ───────────────────────────────────────────────────────────────
 
-from integrations.capacities import (  # noqa: E402
-    CapacitiesClient,
-    CapacitiesError,
+from integrations.obsidian import (  # noqa: E402
+    ObsidianClient,
+    ObsidianError,
     get_previous_weekday,
 )
 from integrations.todoist import (  # noqa: E402
@@ -95,18 +93,23 @@ def run() -> None:
 
     logger.info("=== Morning Brief: %s ===", today.isoformat())
 
-    # ── Capacities ─────────────────────────────────────────────────────────────
-    capacities_token = _require_env("CAPACITIES_API_TOKEN")
-    space_id = _require_env("CAPACITIES_SPACE_ID")
-    cap = CapacitiesClient(api_token=capacities_token, space_id=space_id)
+    # ── Obsidian ───────────────────────────────────────────────────────────────
+    vault_path = _require_env("OBSIDIAN_VAULT_PATH")
+    daily_folder = os.getenv("OBSIDIAN_DAILY_FOLDER", "daily")
 
-    # 1. Roll over incomplete tasks from previous weekday
+    try:
+        obsidian = ObsidianClient(vault_path=vault_path, daily_notes_folder=daily_folder)
+    except ObsidianError as exc:
+        logger.error("Cannot open Obsidian vault: %s", exc)
+        sys.exit(1)
+
+    # 1. Roll over incomplete tasks from the previous weekday
     rollover_md = ""
     try:
-        logger.info("Fetching previous day's note (%s)…", yesterday.isoformat())
-        yesterday_content = cap.get_daily_note_content(yesterday)
+        logger.info("Reading previous day's note (%s)…", yesterday.isoformat())
+        yesterday_content = obsidian.get_daily_note_content(yesterday)
         if yesterday_content:
-            incomplete = cap.extract_incomplete_tasks(yesterday_content)
+            incomplete = obsidian.extract_incomplete_tasks(yesterday_content)
             logger.info(
                 "Found %d incomplete task(s) in %s note.",
                 len(incomplete),
@@ -114,9 +117,9 @@ def run() -> None:
             )
             rollover_md = _build_rollover_section(incomplete)
         else:
-            logger.info("No content found for %s.", yesterday.isoformat())
-    except CapacitiesError as exc:
-        logger.error("Capacities error (rollover): %s", exc)
+            logger.info("No note found for %s – nothing to roll over.", yesterday.isoformat())
+    except Exception as exc:
+        logger.error("Error reading yesterday's Obsidian note: %s", exc)
 
     # ── Todoist ────────────────────────────────────────────────────────────────
     todoist_md = ""
@@ -139,7 +142,6 @@ def run() -> None:
     token_file = os.getenv("GOOGLE_TOKEN_FILE", "config/google_token.json")
     gmail_query = os.getenv("GMAIL_DUE_TODAY_QUERY", "is:starred is:unread")
 
-    # Resolve relative paths against project root
     if not Path(credentials_file).is_absolute():
         credentials_file = str(PROJECT_ROOT / credentials_file)
     if not Path(token_file).is_absolute():
@@ -147,10 +149,7 @@ def run() -> None:
 
     if Path(credentials_file).exists() or Path(token_file).exists():
         try:
-            gmail = GmailClient(
-                credentials_file=credentials_file,
-                token_file=token_file,
-            )
+            gmail = GmailClient(credentials_file=credentials_file, token_file=token_file)
             logger.info("Fetching Gmail messages matching: %s", gmail_query)
             emails = gmail.get_due_emails(query=gmail_query)
             emails_md = format_emails_as_markdown(emails)
@@ -172,16 +171,19 @@ def run() -> None:
         logger.info("Nothing to add to today's note. Exiting.")
         return
 
-    divider = "---\n"
+    divider = "---\n\n"
     append_block = divider + "\n".join(sections)
 
-    # ── Write to Capacities ────────────────────────────────────────────────────
+    # ── Write to Obsidian ──────────────────────────────────────────────────────
     try:
-        logger.info("Appending %d section(s) to today's Capacities note…", len(sections))
-        cap.append_to_daily_note(today, append_block)
-        logger.info("Done. Today's note updated successfully.")
-    except CapacitiesError as exc:
-        logger.error("Failed to update Capacities daily note: %s", exc)
+        logger.info("Appending %d section(s) to today's Obsidian note…", len(sections))
+        obsidian.append_to_daily_note(today, append_block)
+        logger.info(
+            "Done. Note written to: %s",
+            obsidian._note_path(today),
+        )
+    except ObsidianError as exc:
+        logger.error("Failed to write Obsidian daily note: %s", exc)
         sys.exit(1)
 
 

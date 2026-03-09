@@ -6,9 +6,9 @@ A digital executive assistant for Barrett Plumbing that runs a morning brief eve
 
 Each weekday morning the assistant:
 
-1. **Rolls over incomplete tasks** – reads the previous weekday's Capacities daily note, finds any unchecked `[ ]` tasks, and adds them to today's note.
-2. **Pulls Todoist tasks** – fetches every Todoist task scheduled for today and adds it to today's Capacities daily note.
-3. **Pulls Gmail action items** – searches your work Gmail inbox using a configurable query (default: starred + unread) and any Google Tasks due today, and adds them as to-do items in today's Capacities daily note.
+1. **Rolls over incomplete tasks** – reads the previous weekday's Obsidian daily note, finds any unchecked `[ ]` tasks, and appends them to today's note. On Mondays it automatically looks back to Friday.
+2. **Pulls Todoist tasks** – fetches every Todoist task scheduled for today and adds it to today's Obsidian daily note.
+3. **Pulls Gmail action items** – searches your work Gmail inbox using a configurable query (default: starred + unread) and any Google Tasks due today, and adds them as to-do items in today's note.
 
 ---
 
@@ -16,7 +16,8 @@ Each weekday morning the assistant:
 
 - Python 3.10+
 - A Linux server or always-on machine (runs via cron)
-- Accounts: [Capacities](https://capacities.io), [Todoist](https://todoist.com), [Gmail / Google Workspace](https://workspace.google.com)
+- Obsidian vault accessible as a local folder on the server
+- Accounts: [Todoist](https://todoist.com), [Gmail / Google Workspace](https://workspace.google.com)
 
 ---
 
@@ -38,19 +39,26 @@ The script will:
 
 ---
 
-### 2. Configure API credentials
+### 2. Configure environment variables
 
-Edit the `.env` file:
+Edit `.env`:
 
 ```bash
 nano .env
 ```
 
-#### Capacities
+#### Obsidian
 
-1. Open Capacities → **Settings → API**
-2. Generate an API token and copy it → `CAPACITIES_API_TOKEN`
-3. Find your Space ID in the URL (`/space/<id>/`) → `CAPACITIES_SPACE_ID`
+Set the path to your vault and the daily notes folder:
+
+```env
+OBSIDIAN_VAULT_PATH=/home/youruser/obsidian-vault
+OBSIDIAN_DAILY_FOLDER=daily
+```
+
+The script reads and writes files at `<vault>/<daily_folder>/YYYY-MM-DD.md`.
+
+> **Tip:** If your vault lives on another machine (laptop, NAS), sync it to the server first using [Syncthing](https://syncthing.net), [rclone](https://rclone.org), or git. The script just needs the folder to be present on disk.
 
 #### Todoist
 
@@ -86,23 +94,22 @@ source .venv/bin/activate
 python src/integrations/gmail.py --auth
 ```
 
-A browser window will open. Sign in with your work Google account and grant the requested permissions. The token is saved to `config/google_token.json` and all future runs are silent.
+A browser window opens. Sign in with your work Google account and grant permissions. The token saves to `config/google_token.json` – all future runs are silent.
 
 ---
 
 ### 4. Configure the Gmail search query
 
-The `GMAIL_DUE_TODAY_QUERY` variable in `.env` controls which emails are treated as action items. The default (`is:starred is:unread`) picks up starred, unread emails.
-
-Other useful examples:
+The `GMAIL_DUE_TODAY_QUERY` variable controls which emails are pulled as action items:
 
 | Query | What it finds |
 |---|---|
-| `label:follow-up` | Emails you labelled "follow-up" |
+| `is:starred is:unread` | Starred unread emails *(default)* |
+| `label:follow-up` | Emails with a "follow-up" label |
 | `label:action-required is:unread` | Emails with a custom "action-required" label |
 | `is:starred is:unread newer_than:7d` | Starred unread emails from the last 7 days |
 
-> **Tip:** Create a Gmail label called `Follow Up` and apply it to emails that need action. Set the query to `label:follow-up` for clean, intentional control.
+> **Tip:** Create a Gmail label called `Follow Up` and apply it to emails that need action, then set `GMAIL_DUE_TODAY_QUERY=label:follow-up`.
 
 ---
 
@@ -113,19 +120,19 @@ source .venv/bin/activate
 python src/morning_brief.py
 ```
 
-Check your Capacities daily note for today – you should see new sections appended.
+Check your Obsidian vault – today's daily note should have new sections appended.
 
 ---
 
 ### 6. Cron schedule
 
-The setup script offers to install the cron job for you. To verify or add it manually:
+The setup script offers to install the cron job. To verify or add it manually:
 
 ```bash
 crontab -e
 ```
 
-Add this line (replacing `/path/to` with your actual path):
+Add this line (replace `/path/to` with your actual path):
 
 ```
 0 4 * * 1-5 cd /path/to/BP-Executive-Assistant && .venv/bin/python src/morning_brief.py >> logs/cron.log 2>&1
@@ -143,7 +150,7 @@ BP-Executive-Assistant/
 ├── src/
 │   ├── morning_brief.py          # Main orchestrator (entry point)
 │   └── integrations/
-│       ├── capacities.py         # Capacities API client
+│       ├── obsidian.py           # Reads/writes local Obsidian vault files
 │       ├── todoist.py            # Todoist REST API client
 │       └── gmail.py              # Gmail + Google Tasks client
 ├── config/
@@ -158,12 +165,13 @@ BP-Executive-Assistant/
 
 ---
 
-## What gets added to your Capacities daily note
+## What gets added to your Obsidian daily note
 
-Each morning brief appends a block like this:
+Each morning brief appends a block like this to `daily/YYYY-MM-DD.md`:
 
 ```markdown
 ---
+
 ### Rolled Over from Yesterday
 
 - [ ] Call back Mike re: water heater quote
@@ -189,9 +197,10 @@ Each morning brief appends a block like this:
 
 ## Troubleshooting
 
-**Nothing appears in my Capacities note**
-- Check `logs/cron.log` or run manually and read the output
-- Verify your `CAPACITIES_API_TOKEN` and `CAPACITIES_SPACE_ID` are correct
+**Nothing appears in my daily note**
+- Run manually and check the output: `source .venv/bin/activate && python src/morning_brief.py`
+- Confirm `OBSIDIAN_VAULT_PATH` points to the correct directory
+- Confirm `OBSIDIAN_DAILY_FOLDER` matches the folder name in your vault
 
 **Gmail auth fails**
 - Delete `config/google_token.json` and re-run `python src/integrations/gmail.py --auth`
@@ -199,4 +208,4 @@ Each morning brief appends a block like this:
 **Cron job not running**
 - Confirm cron is active: `systemctl status cron`
 - Check `/var/log/syslog` for cron execution entries
-- Make sure the path in your crontab line is absolute
+- Make sure the path in your crontab is absolute
