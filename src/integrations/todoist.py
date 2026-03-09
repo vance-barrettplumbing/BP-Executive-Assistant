@@ -1,8 +1,8 @@
 """
 Todoist API integration.
 
-Fetches tasks that are due on a given date using the Todoist Sync API v9.
-API docs: https://developer.todoist.com/sync/v9/
+Fetches tasks that are due on a given date using the Todoist API v1.
+API docs: https://developer.todoist.com/api/v1/
 """
 
 import logging
@@ -12,7 +12,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_SYNC_URL = "https://api.todoist.com/sync/v9/sync"
+_BASE_URL = "https://api.todoist.com/api/v1"
 
 
 class TodoistError(Exception):
@@ -21,18 +21,28 @@ class TodoistError(Exception):
 
 class TodoistClient:
     def __init__(self, api_token: str):
-        self._token = api_token
         self._headers = {"Authorization": f"Bearer {api_token}"}
 
-    def _sync(self, resource_types: list[str]) -> dict:
-        resp = requests.post(
-            _SYNC_URL,
-            headers=self._headers,
-            json={"sync_token": "*", "resource_types": resource_types},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    def _get_paginated(self, path: str, params: dict) -> list[dict]:
+        """Fetch all pages from a cursor-paginated endpoint."""
+        results = []
+        cursor = None
+        while True:
+            if cursor:
+                params = {**params, "cursor": cursor}
+            resp = requests.get(
+                f"{_BASE_URL}{path}",
+                headers=self._headers,
+                params=params,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            results.extend(data.get("results", []))
+            cursor = data.get("next_cursor")
+            if not cursor:
+                break
+        return results
 
     def get_tasks_due_on(self, target_date: date) -> list[dict]:
         """
@@ -48,28 +58,31 @@ class TodoistClient:
         """
         date_str = target_date.isoformat()
         try:
-            data = self._sync(["items", "projects"])
+            tasks = self._get_paginated(
+                "/tasks/filter", {"query": f"due: {date_str}"}
+            )
         except Exception as exc:
             raise TodoistError(f"Failed to fetch Todoist tasks: {exc}") from exc
 
-        projects = {p["id"]: p["name"] for p in data.get("projects", [])}
+        # Build project id → name map for display
+        try:
+            projects_resp = self._get_paginated("/projects", {})
+            projects = {p["id"]: p["name"] for p in projects_resp}
+        except Exception:
+            projects = {}
 
         results = []
-        for item in data.get("items", []):
-            if item.get("checked") or item.get("is_deleted"):
-                continue
-            due = item.get("due")
-            if due and due.get("date", "").startswith(date_str):
-                results.append(
-                    {
-                        "id": item["id"],
-                        "content": item["content"],
-                        "description": item.get("description") or "",
-                        "priority": item.get("priority", 1),
-                        "project": projects.get(item.get("project_id"), ""),
-                        "url": f"https://todoist.com/app/task/{item['id']}",
-                    }
-                )
+        for task in tasks:
+            results.append(
+                {
+                    "id": task["id"],
+                    "content": task["content"],
+                    "description": task.get("description") or "",
+                    "priority": task.get("priority", 1),
+                    "project": projects.get(task.get("project_id"), ""),
+                    "url": task.get("url", f"https://todoist.com/app/task/{task['id']}"),
+                }
+            )
 
         logger.info("Found %d Todoist task(s) due on %s", len(results), date_str)
         return results
