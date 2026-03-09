@@ -1,16 +1,18 @@
 """
 Todoist API integration.
 
-Fetches tasks that are due on a given date using the Todoist REST API v2.
-API docs: https://developer.todoist.com/rest/v2/
+Fetches tasks that are due on a given date using the Todoist Sync API v9.
+API docs: https://developer.todoist.com/sync/v9/
 """
 
 import logging
 from datetime import date
 
-from todoist_api_python.api import TodoistAPI
+import requests
 
 logger = logging.getLogger(__name__)
+
+_SYNC_URL = "https://api.todoist.com/sync/v9/sync"
 
 
 class TodoistError(Exception):
@@ -19,7 +21,18 @@ class TodoistError(Exception):
 
 class TodoistClient:
     def __init__(self, api_token: str):
-        self.api = TodoistAPI(api_token)
+        self._token = api_token
+        self._headers = {"Authorization": f"Bearer {api_token}"}
+
+    def _sync(self, resource_types: list[str]) -> dict:
+        resp = requests.post(
+            _SYNC_URL,
+            headers=self._headers,
+            json={"sync_token": "*", "resource_types": resource_types},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     def get_tasks_due_on(self, target_date: date) -> list[dict]:
         """
@@ -35,35 +48,34 @@ class TodoistClient:
         """
         date_str = target_date.isoformat()
         try:
-            all_tasks = self.api.get_tasks(filter=f"due: {date_str}")
+            data = self._sync(["items", "projects"])
         except Exception as exc:
             raise TodoistError(f"Failed to fetch Todoist tasks: {exc}") from exc
 
-        # Build project id → name map for display
-        try:
-            projects = {p.id: p.name for p in self.api.get_projects()}
-        except Exception:
-            projects = {}
+        projects = {p["id"]: p["name"] for p in data.get("projects", [])}
 
         results = []
-        for task in all_tasks:
-            results.append(
-                {
-                    "id": task.id,
-                    "content": task.content,
-                    "description": task.description or "",
-                    "priority": task.priority,
-                    "project": projects.get(task.project_id, ""),
-                    "url": task.url,
-                }
-            )
+        for item in data.get("items", []):
+            if item.get("checked") or item.get("is_deleted"):
+                continue
+            due = item.get("due")
+            if due and due.get("date", "").startswith(date_str):
+                results.append(
+                    {
+                        "id": item["id"],
+                        "content": item["content"],
+                        "description": item.get("description") or "",
+                        "priority": item.get("priority", 1),
+                        "project": projects.get(item.get("project_id"), ""),
+                        "url": f"https://todoist.com/app/task/{item['id']}",
+                    }
+                )
 
         logger.info("Found %d Todoist task(s) due on %s", len(results), date_str)
         return results
 
 
 def format_todoist_tasks_as_markdown(tasks: list[dict]) -> str:
-    """Convert a list of Todoist task dicts to Capacities-compatible markdown."""
     if not tasks:
         return ""
     lines = ["### Todoist Tasks", ""]
@@ -72,7 +84,6 @@ def format_todoist_tasks_as_markdown(tasks: list[dict]) -> str:
         priority_marker = _priority_label(task["priority"])
         lines.append(f"- [ ] {task['content']}{project_tag}{priority_marker}")
         if task["description"]:
-            # Indent description as a sub-item so it's visually grouped
             lines.append(f"  - {task['description']}")
     lines.append("")
     return "\n".join(lines)
