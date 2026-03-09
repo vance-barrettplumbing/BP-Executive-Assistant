@@ -35,7 +35,13 @@ done
 # ── 2. Virtual environment ─────────────────────────────────────────────────────
 if [[ ! -d ".venv" ]]; then
     info "Creating virtual environment in .venv…"
-    "$python_cmd" -m venv .venv
+    if ! "$python_cmd" -m venv .venv 2>/dev/null || [[ ! -f ".venv/bin/activate" ]]; then
+        rm -rf .venv
+        error "Failed to create virtual environment. On Ubuntu/Debian, run:\n  sudo apt install python3-venv python3.12-venv\nthen re-run this script."
+    fi
+fi
+if [[ ! -f ".venv/bin/activate" ]]; then
+    error ".venv exists but is incomplete. Delete it with 'rm -rf .venv' and re-run this script."
 fi
 source .venv/bin/activate
 info "Virtual environment activated."
