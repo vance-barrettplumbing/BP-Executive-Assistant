@@ -35,7 +35,7 @@ class TodoistClient:
         """
         date_str = target_date.isoformat()
         try:
-            all_tasks = self.api.get_tasks()
+            all_tasks = self.api.get_tasks(filter=f"due: {date_str}")
         except Exception as exc:
             raise TodoistError(f"Failed to fetch Todoist tasks: {exc}") from exc
 
@@ -47,17 +47,16 @@ class TodoistClient:
 
         results = []
         for task in all_tasks:
-            if task.due and task.due.date == date_str:
-                results.append(
-                    {
-                        "id": task.id,
-                        "content": task.content,
-                        "description": task.description or "",
-                        "priority": task.priority,
-                        "project": projects.get(task.project_id, ""),
-                        "url": task.url,
-                    }
-                )
+            results.append(
+                {
+                    "id": task.id,
+                    "content": task.content,
+                    "description": task.description or "",
+                    "priority": task.priority,
+                    "project": projects.get(task.project_id, ""),
+                    "url": task.url,
+                }
+            )
 
         logger.info("Found %d Todoist task(s) due on %s", len(results), date_str)
         return results
