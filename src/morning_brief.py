@@ -6,8 +6,7 @@ Runs every weekday morning at 4 AM and:
 1. Rolls over any incomplete tasks ([ ] checkboxes) from the previous
    weekday's Obsidian daily note into today's note.
 2. Pulls Todoist tasks due today and adds them to today's note.
-3. Pulls Gmail emails matching the configured search query + Google Tasks
-   due today and adds them to today's note.
+3. Pulls Google Tasks due today and adds them to today's note.
 
 Usage:
     python src/morning_brief.py
@@ -60,7 +59,6 @@ from integrations.todoist import (  # noqa: E402
 from integrations.gmail import (  # noqa: E402
     GmailClient,
     GmailError,
-    format_emails_as_markdown,
     format_google_tasks_as_markdown,
 )
 
@@ -135,12 +133,10 @@ def run() -> None:
     else:
         logger.warning("TODOIST_API_TOKEN not set – skipping Todoist.")
 
-    # ── Gmail ──────────────────────────────────────────────────────────────────
-    emails_md = ""
+    # ── Google Tasks ───────────────────────────────────────────────────────────
     google_tasks_md = ""
     credentials_file = os.getenv("GOOGLE_CREDENTIALS_FILE", "config/google_credentials.json")
     token_file = os.getenv("GOOGLE_TOKEN_FILE", "config/google_token.json")
-    gmail_query = os.getenv("GMAIL_DUE_TODAY_QUERY", "is:starred is:unread")
 
     if not Path(credentials_file).is_absolute():
         credentials_file = str(PROJECT_ROOT / credentials_file)
@@ -149,23 +145,19 @@ def run() -> None:
 
     if Path(credentials_file).exists() or Path(token_file).exists():
         try:
-            gmail = GmailClient(credentials_file=credentials_file, token_file=token_file)
-            logger.info("Fetching Gmail messages matching: %s", gmail_query)
-            emails = gmail.get_due_emails(query=gmail_query)
-            emails_md = format_emails_as_markdown(emails)
-
+            gclient = GmailClient(credentials_file=credentials_file, token_file=token_file)
             logger.info("Fetching Google Tasks due on %s…", today.isoformat())
-            gtasks = gmail.get_google_tasks_due_on(today)
+            gtasks = gclient.get_google_tasks_due_on(today)
             google_tasks_md = format_google_tasks_as_markdown(gtasks)
         except GmailError as exc:
-            logger.error("Gmail/Google Tasks error: %s", exc)
+            logger.error("Google Tasks error: %s", exc)
     else:
         logger.warning(
-            "Google credentials not found at %s – skipping Gmail.", credentials_file
+            "Google credentials not found at %s – skipping Google Tasks.", credentials_file
         )
 
     # ── Build the append block ─────────────────────────────────────────────────
-    sections = [s for s in [rollover_md, todoist_md, google_tasks_md, emails_md] if s]
+    sections = [s for s in [rollover_md, todoist_md, google_tasks_md] if s]
 
     if not sections:
         logger.info("Nothing to add to today's note. Exiting.")
